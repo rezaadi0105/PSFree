@@ -989,7 +989,7 @@ function make_aliased_pktopts(sds) {
             setsockopt(sds[i], IPPROTO_IPV6, IPV6_2292PKTOPTIONS, 0, 0);
         }
     }
-    die('failed to make aliased pktopts');
+    die('failed to make aliased pktopts, Restart PlayStation and Try Again');
 }
 
 function double_free_reqs1(

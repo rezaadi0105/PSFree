@@ -202,7 +202,16 @@ h1 {
     </div>
 </div>
 
-<script src="./payload.js"></script>
-<script type="module" src="./alert.mjs"></script>
+    <script>
+        if (window.applicationCache.status=='0'){window.location.replace("cache.html");}
+        function load_mainmenu(){
+        var link = document.createElement('a');
+        document.body.appendChild(link);
+        link.href = '../index.html';
+        link.click();
+        }
+    </script>
+    <script src="./payload.js"></script>
+    <script type="module" src="./alert.mjs"></script>
 </body>
 </html>

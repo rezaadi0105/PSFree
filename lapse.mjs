@@ -136,7 +136,7 @@ const main_core = 7;
 const num_grooms = 0x200;
 const num_handles = 0x100;
 const num_sds = 0x100; // max is 0x100 due to max IPV6_TCLASS
-const num_alias = 50; //TODO: check best value here for 9.xx
+const num_alias = 20; //TODO: check best value here for 9.xx
 const num_races = 100;
 const leak_len = 16;
 const num_leaks = 5;
@@ -1601,7 +1601,7 @@ async function patch_kernel(kbase, kmem, p_ucred, restore_info) {
     log('setuid(0)');
     sysi('setuid', 0);
     log('kernel exploit succeeded!');
-    alert("Exploit complete...Press X to load GoldHen!");
+    alert("Exploit complete...Press OK after 5 seconds to load GoldHen!");
 }
 
 // FUNCTIONS FOR STAGE: SETUP

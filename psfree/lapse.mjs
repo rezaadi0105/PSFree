@@ -174,6 +174,10 @@ function call_nze(...args) {
     }
 }
 
+function allset(){
+     msgs.innerHTML="PS4 Exploited And Payloads Loaded.";
+}
+
 // #define SCE_KERNEL_AIO_STATE_NOTIFIED       0x10000
 //
 // #define SCE_KERNEL_AIO_STATE_SUBMITTED      1
@@ -1829,6 +1833,7 @@ kexploit().then(() => {
       pl.set(shellcode,0);
       var pthread = malloc(0x10);
       call_nze('pthread_create', pthread, 0, loader_addr, payload_buffer);
+      allset();
       }
    };
 

@@ -1752,7 +1752,7 @@ export async function kexploit() {
     }
     
     if (localStorage.ExploitLoaded=="yes" && sessionStorage.ExploitLoaded!="yes") {
-        runBinLoader();
+        setTimeout(runBinLoader,500);
         return new Promise(() => {});
     }
 
@@ -1852,7 +1852,7 @@ export async function kexploit() {
 
 // KEX
 kexploit().then(() => {
-    loadPayload();
+    setTimeout(loadPayload,500);
 })
 
 function malloc(sz) {

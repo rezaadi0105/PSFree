@@ -1,9 +1,10 @@
 CACHE MANIFEST
 # v1
-# Generated on 2025-09-02 19:22:14.761614
+# Generated on 2025-09-02 21:11:03.306128
 
 CACHE:
 alert.mjs
+bg.jpg
 config.mjs
 favicon.ico
 cache.html

